@@ -27,6 +27,7 @@
  *	ver. 1.1.3 2025-11-30	amithalp  - logging cleanup, Kept periodic temperature readings as INFO
  * 									  - Downgraded high-volume telemetry (setpoint, operating state, switch state, child lock, RTT, “not parsed”) to DEBUG
  *    								  – Normalized all logging via logDebug/logInfo/logWarn helpers (removed bare log.info)
+ *  ver. 1.1.4 2025-12-09  amithalp  - Added fanAuto(), fanOn(), fanCirculate() wrapper commands to satisfy Thermostat capability expectations and prevent MissingMethodException errors from Dashboard tiles/apps.
  *
  *          Remarks by amithalp when working on this driver to make it fit the AVATTO2 (manufacturer: _TZE204_lzriup1j)
  *             tuyaDatapoints: [
@@ -68,8 +69,8 @@
  *                // Sat-Sun: 8:05 --> 20C, 23:00 --> 16C
  */
 
-def version()   { "1.1.3" }
-def timeStamp() { "30/11/2025 22:37" }
+def version()   { "1.1.4" }
+def timeStamp() { "09/12/2025 21:08" }
 
 import groovy.json.*
 import groovy.transform.Field
@@ -681,6 +682,21 @@ def on() {
 
 def setThermostatFanMode(fanMode) {
     sendEvent(name: "thermostatFanMode", value: "${fanMode}", descriptionText: getDescriptionText("thermostatFanMode is ${fanMode}"))
+}
+
+def fanAuto() {
+    logDebug "fanAuto() called"
+    setThermostatFanMode("auto")
+}
+
+def fanOn() {
+    logDebug "fanOn() called"
+    setThermostatFanMode("on")
+}
+
+def fanCirculate() {
+    logDebug "fanCirculate() called"
+    setThermostatFanMode("circulate")
 }
 
 def setSchedule(schedule) {
