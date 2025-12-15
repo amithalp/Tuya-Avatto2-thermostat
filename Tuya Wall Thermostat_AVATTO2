@@ -67,10 +67,30 @@
  *                // Then the schedule is:
  *                // Mon-Fri: 6:10 --> 40C, 8:10 --> 17C, 11:40 --> 17C, 12:40 --> 17C, 17:10 --> 23C, 22:10 --> 17C
  *                // Sat-Sun: 8:05 --> 20C, 23:00 --> 16C
+ *//**
+ * IMPORTANT NOTE – Temperature report flooding & logging behavior
+ *
+ * This Tuya AVATTO2 thermostat reports local temperature very frequently
+ * (often every ~15 seconds), even when the value has not changed.
+ *
+ * By default, every temperature report was logged and forwarded via Hub Mesh,
+ * causing excessive INFO log entries on the main hub and unnecessary load.
+ *
+ * This driver intentionally suppresses duplicate / insignificant temperature
+ * reports by:
+ *  - Ignoring unchanged values
+ *  - Optionally enforcing a minimum time between reports
+ *  - Downgrading high-frequency telemetry to DEBUG or conditional INFO
+ *
+ * This is a driver-side mitigation for device behavior and does NOT affect
+ * thermostat control accuracy or responsiveness.
+ *
+ * If you re-enable full temperature logging, expect heavy log volume.
  */
 
-def version()   { "1.1.4" }
-def timeStamp() { "09/12/2025 21:08" }
+
+def version()   { "1.1.5" }
+def timeStamp() { "15/12/2025 13:50" }
 
 import groovy.json.*
 import groovy.transform.Field
@@ -155,6 +175,10 @@ metadata {
             input (name: "homeKitCompatibility",  type: "bool", title: "<b>HomeKit Compatibility</b>",  description: "Enable/disable HomeKit Compatibility", defaultValue: false)
             input (name: "PresetMode",  type: "enum", title: "<b>Preset Mode</b>",  description: "Auto or Manual", defaultValue: 0, options: [0:"manual", 1:"auto", 2:"temporary_manual"])
             input (name: 'frostProtection', type: 'bool', title: '<b>Disable/Enable frost protection</b>', description: '<i>Disable/Enable frost protection</i>', defaultValue: true)
+            input name: "tempInfoLogging", type: "bool", title: "<b>Temperature INFO logs</b>", defaultValue: false
+			input name: "tempReportDelta", type: "decimal", title: "<b>Temperature delta to report (°C)</b>", defaultValue: 0.1, range: "0.0..2.0"
+			input name: "tempMinReportSeconds", type: "number", title: "<b>Minimum seconds between temperature reports</b>", defaultValue: 60, range: "0..3600"
+
         }
     }
 }
@@ -492,15 +516,34 @@ def processTuyaHeatSetpointReport( fncmd ) {
     state.lastRx = mapToJsonString( lastRxMap)
 }
 
+@Field static final BigDecimal DEFAULT_TEMP_DELTA = 0.1G
+@Field static final Integer    DEFAULT_TEMP_MIN_SECS = 60
+
 def processTuyaTemperatureReport(fncmd) {
-    if (getModelGroup() != 'AVATTO2') {
-        logWarn "Model '${getModelGroup()}' is not supported by this method. Processing skipped."
-        return
+    if (getModelGroup() != 'AVATTO2') return
+
+    BigDecimal temp = (fncmd / 10.0).toBigDecimal().setScale(1, BigDecimal.ROUND_HALF_UP)
+
+    BigDecimal lastTemp = (state.lastTemp != null) ? (state.lastTemp as BigDecimal) : null
+    Long lastTs = (state.lastTempTs != null) ? (state.lastTempTs as Long) : 0L
+    long nowMs = now()
+
+    BigDecimal delta = (settings?.tempReportDelta != null) ? (settings.tempReportDelta as BigDecimal) : DEFAULT_TEMP_DELTA
+    Integer minSecs = (settings?.tempMinReportSeconds != null) ? (settings.tempMinReportSeconds as Integer) : DEFAULT_TEMP_MIN_SECS
+
+    boolean changedEnough = (lastTemp == null) || (temp - lastTemp).abs() >= delta
+    boolean timeOk = (nowMs - lastTs) >= (minSecs * 1000L)
+
+    if (changedEnough && timeOk) {
+        state.lastTemp = temp
+        state.lastTempTs = nowMs
+        sendEvent(name: "temperature", value: temp, unit: "°C")
+        if (settings?.tempInfoLogging != false) {
+            logInfo "Temperature is: ${temp}°C"
+        }
+    } else {
+        logDebug "Suppressed temp report ${temp}°C (last=${lastTemp}, delta=${delta}, minSecs=${minSecs})"
     }
-    double currentTemperatureValue = fncmd / 10.0
-    // kept as INFO by design – periodic, human-useful telemetry
-    logInfo "Temperature is: ${currentTemperatureValue}" + "\u00B0" + "C"
-    sendEvent(name: "temperature", value: currentTemperatureValue, unit: "\u00B0" + "C")
 }
 
 def processTuyaCalibration( dp, fncmd ) {
@@ -515,7 +558,7 @@ def processTuyaCalibration( dp, fncmd ) {
         logWarn "UNSUPPORTED temperature calibration for modelGroup=${getModelGroup()} : ${temp} (dp=${dp}, fncmd=${fncmd})"
     }
     logInfo "temperature calibration (correction) is: ${doubleCalib} °C (dp=${dp}, fncmd=${fncmd}) "
-}
+  }
 
 def processPresets( dp, data ) {
     logDebug "processPresets fp-${dp} data=${data}"
